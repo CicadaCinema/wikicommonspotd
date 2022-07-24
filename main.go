@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/dghubble/oauth1"
+	"github.com/h2non/bimg"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
@@ -14,6 +15,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -84,6 +86,59 @@ func downloadFile(file *os.File, url string) {
 	}
 }
 
+func compressFile(path string, quality int, fileSizeLimit int) string {
+	log.WithFields(log.Fields{
+		"fileSizeLimit": fileSizeLimit,
+		"jpegQuality":   quality,
+	}).Info("starting compression algorithm")
+
+	originalBuffer, err := bimg.Read(path)
+	if err != nil {
+		log.WithError(err).WithField("path", path).Panic("could not read input file to buffer")
+	}
+	size := len(originalBuffer)
+	log.WithField("size", size).Info("read the size of the original file")
+
+	// if the size of the file is already below Twitter's limit, just return its path
+	if size < fileSizeLimit {
+		log.Info("no image processing needed, file size is already below limit")
+		return path
+	}
+
+	dimensions, err := bimg.NewImage(originalBuffer).Size()
+	if err != nil {
+		log.WithError(err).Panic("could not get image dimensions")
+	}
+
+	newWidth := dimensions.Width
+	var body []byte
+
+	// lower resolution repeatedly and check if compressing gives an acceptable result
+	for size >= fileSizeLimit {
+		log.WithFields(log.Fields{"size": size, "width": newWidth}).Info("unacceptable size, retrying")
+		newWidth -= 100
+		body, err = bimg.NewImage(originalBuffer).Process(bimg.Options{Width: newWidth, Quality: quality})
+		if err != nil {
+			log.WithError(err).WithField("width", newWidth).Panic("failed to execute re-encode operation")
+		}
+		size = len(body)
+	}
+
+	log.WithFields(log.Fields{"size": size, "width": newWidth}).Info("an acceptable result was obtained")
+
+	err = bimg.Write("new.jpeg", body)
+	if err != nil {
+		log.WithError(err).Panic("could not write new image to disk")
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		log.WithError(err).Panic("could not get current working directory")
+	}
+
+	return filepath.Join(cwd, "new.jpeg")
+}
+
 func getAuthorisedClient() *http.Client {
 	// authorize the developer account @WikiCommonsPOTD
 	// TODO: store this in an environment variable
@@ -129,7 +184,7 @@ func uploadImage(httpClient *http.Client, imagePath string) string {
 	defer resp.Body.Close()
 
 	// check http response
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			log.WithError(err).WithField("statusCode", resp.StatusCode).Panic("could not read http response body after attempt to upload media to Twitter resulted in a bad http status")
@@ -162,7 +217,7 @@ func postTweetWithImage(httpClient *http.Client, tweetBody string, mediaId strin
 		log.WithError(err).WithFields(log.Fields{"text": tweetBody, "mediaId": mediaId}).Panic("could not marshal TweetRequest object to JSON")
 	}
 
-	fmt.Println(string(postBody))
+	log.WithField("requestBody", string(postBody)).Info("post body generated")
 
 	resp, err := httpClient.Post("https://api.twitter.com/2/tweets", "application/json", bytes.NewBuffer(postBody))
 
@@ -173,7 +228,7 @@ func postTweetWithImage(httpClient *http.Client, tweetBody string, mediaId strin
 	defer resp.Body.Close()
 
 	// check http response
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			log.WithError(err).WithField("statusCode", resp.StatusCode).Panic("could not read http response body after attempt to submit tweet resulted in a bad http status")
@@ -199,7 +254,6 @@ func main() {
 	if err != nil {
 		log.WithError(err).Panic("failed to create temporary file")
 	}
-	defer tempFile.Close()
 	defer os.Remove(tempFile.Name())
 	log.WithField("path", tempFile.Name()).Info("created temporary file")
 
@@ -210,13 +264,21 @@ func main() {
 		"destination": tempFile.Name(),
 	}).Info("downloaded potd image")
 
-	// TODO: resize image to fit Twitter's 5MB limit before uploading
+	// close the temporary file
+	err = tempFile.Close()
+	if err != nil {
+		log.WithError(err).Panic("could not close potd image file")
+	}
+
+	// resize image to fit Twitter's 5MB limit before uploading
+	compressedFile := compressFile(tempFile.Name(), 90, 5000000)
+	defer os.Remove(compressedFile)
 
 	// this Client will automatically authorize any requests to the Twitter API
 	httpClient := getAuthorisedClient()
 	log.Info("created http client")
 
-	mediaId := uploadImage(httpClient, tempFile.Name())
+	mediaId := uploadImage(httpClient, compressedFile)
 	log.Info("potd image uploaded")
 
 	postTweetWithImage(httpClient, potd.Description, mediaId)
