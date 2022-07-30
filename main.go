@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/dghubble/oauth1"
 	"github.com/h2non/bimg"
+	twtextparse "github.com/myl7/twitter-text-parse-go/pkg/gnu"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
@@ -203,6 +204,45 @@ func uploadImage(httpClient *http.Client, imagePath string) string {
 	return strconv.Itoa(m.MediaId)
 }
 
+func TruncateTweetBody(text string) string {
+	log.WithField("textInput", text).Info("starting to truncate text")
+
+	// test if tweet body is valid without modification
+	res, err := twtextparse.Parse(text)
+	if err != nil {
+		log.WithField("text", text).Panic("could not parse unmodified tweet text")
+	}
+
+	// initialise variables, ensuring textFinal is the unmodified string (it will be returned if the unmodified result is valid)
+	words := strings.Fields("")
+	wordsForTest := append(words, "...")
+	textFinal := text
+
+	valid := res.IsValid
+	// if the result is still invalid,
+	for !valid {
+		// split the input string into words, remove the last word and concatenate the slice into a string again for the next iteration
+		words = strings.Fields(text)
+		words = words[:len(words)-1]
+		text = strings.Join(words, " ")
+
+		// add an ellipsis and concatenate the slice into a string for testing
+		wordsForTest = append(words, "...")
+		textFinal = strings.Join(wordsForTest, " ")
+
+		// test if textFinal is valid
+		res, err = twtextparse.Parse(textFinal)
+		if err != nil {
+			log.WithField("text", textFinal).Panic("could not parse tweet text")
+		}
+		valid = res.IsValid
+
+	}
+
+	log.WithField("textOutput", textFinal).Info("finished truncating text")
+	return textFinal
+}
+
 func postTweetWithImage(httpClient *http.Client, tweetBody string, mediaId string) {
 	// create an object to be used in the http POST request to twitter
 	req := TweetRequest{
@@ -281,6 +321,6 @@ func main() {
 	mediaId := uploadImage(httpClient, compressedFile)
 	log.Info("potd image uploaded")
 
-	postTweetWithImage(httpClient, potd.Description, mediaId)
+	postTweetWithImage(httpClient, TruncateTweetBody(potd.Description), mediaId)
 	log.Info("tweet posted")
 }
