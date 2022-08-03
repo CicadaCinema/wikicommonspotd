@@ -111,21 +111,28 @@ func compressFile(path string, quality int, fileSizeLimit int) string {
 		log.WithError(err).Panic("could not get image dimensions")
 	}
 
-	newWidth := dimensions.Width
+	maxWidth := dimensions.Width
+	minWidth := 1
 	var body []byte
 
-	// lower resolution repeatedly and check if compressing gives an acceptable result
-	for size >= fileSizeLimit {
-		log.WithFields(log.Fields{"size": size, "width": newWidth}).Info("unacceptable size, retrying")
-		newWidth -= 100
-		body, err = bimg.NewImage(originalBuffer).Process(bimg.Options{Width: newWidth, Quality: quality})
+	// use binary search to find the highest resolution giving an acceptable file size
+	log.Info("starting binary search algorithm")
+	for maxWidth-minWidth >= 10 {
+		log.WithFields(log.Fields{"maxWidth": maxWidth, "minWidth": minWidth}).Info("unacceptable range, retrying")
+		testWidth := (maxWidth + minWidth) / 2
+		body, err = bimg.NewImage(originalBuffer).Process(bimg.Options{Width: testWidth, Quality: quality, Type: bimg.JPEG})
 		if err != nil {
-			log.WithError(err).WithField("width", newWidth).Panic("failed to execute re-encode operation")
+			log.WithError(err).WithField("width", testWidth).Panic("failed to execute re-encode operation")
 		}
 		size = len(body)
+		if size >= fileSizeLimit {
+			maxWidth = testWidth
+		} else {
+			minWidth = testWidth
+		}
 	}
 
-	log.WithFields(log.Fields{"size": size, "width": newWidth}).Info("an acceptable result was obtained")
+	log.WithFields(log.Fields{"size": size, "width": minWidth}).Info("an acceptable result was obtained")
 
 	err = bimg.Write("new.jpeg", body)
 	if err != nil {
