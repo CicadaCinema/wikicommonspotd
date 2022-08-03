@@ -30,9 +30,22 @@ type MediaUpload struct {
 	MediaId int `json:"media_id"`
 }
 
-type TweetRequest struct {
+type TweetPost struct {
+	Data TweetPostInner `json:"data"`
+}
+
+type TweetPostInner struct {
+	Id string `json:"id"`
+}
+
+type TweetRequestWithMedia struct {
 	Text  string              `json:"text"`
 	Media map[string][]string `json:"media"`
+}
+
+type TweetRequestInReply struct {
+	Text  string            `json:"text"`
+	Reply map[string]string `json:"reply"`
 }
 
 func getPotdInfo(spreadsheetId string, sheetRange string) PotdEntry {
@@ -206,53 +219,100 @@ func uploadImage(httpClient *http.Client, imagePath string) string {
 	m := &MediaUpload{}
 	err = json.NewDecoder(resp.Body).Decode(m)
 	if err != nil {
-		log.WithError(err).Panic("could not decode Twitter API response")
+		log.WithError(err).Panic("could not decode Twitter API response and find id of uploaded media")
 	}
 	return strconv.Itoa(m.MediaId)
 }
 
-func TruncateTweetBody(text string) string {
-	log.WithField("textInput", text).Info("starting to truncate text")
-
-	// test if tweet body is valid without modification
+func checkValid(text string) bool {
 	res, err := twtextparse.Parse(text)
 	if err != nil {
-		log.WithField("text", text).Panic("could not parse unmodified tweet text")
+		log.WithField("text", text).Panic("could not parse text to determine validity")
 	}
-
-	// initialise variables, ensuring textFinal is the unmodified string (it will be returned if the unmodified result is valid)
-	words := strings.Fields("")
-	wordsForTest := append(words, "...")
-	textFinal := text
-
-	valid := res.IsValid
-	// if the result is still invalid,
-	for !valid {
-		// split the input string into words, remove the last word and concatenate the slice into a string again for the next iteration
-		words = strings.Fields(text)
-		words = words[:len(words)-1]
-		text = strings.Join(words, " ")
-
-		// add an ellipsis and concatenate the slice into a string for testing
-		wordsForTest = append(words, "...")
-		textFinal = strings.Join(wordsForTest, " ")
-
-		// test if textFinal is valid
-		res, err = twtextparse.Parse(textFinal)
-		if err != nil {
-			log.WithField("text", textFinal).Panic("could not parse tweet text")
-		}
-		valid = res.IsValid
-
-	}
-
-	log.WithField("textOutput", textFinal).Info("finished truncating text")
-	return textFinal
+	return res.IsValid
 }
 
-func postTweetWithImage(httpClient *http.Client, tweetBody string, mediaId string) {
+func tweetFromSlice(words []string) string {
+	return strings.Join(words, " ")
+}
+
+func TruncateTweetBody(text string) []string {
+	log.WithField("textInput", text).Info("starting to truncate text")
+
+	const ellipsis = "..."
+
+	var allTweets []string
+	allWords := strings.Fields(text)
+	previousAllWordsCount := len(allWords) + 1
+	leadingEllipsis := ""
+	for {
+		// attempt to fit the entire slice of remaining words into a single tweet
+		remainderString := leadingEllipsis + tweetFromSlice(allWords)
+
+		// if this constitutes a valid tweet, then add this as a tweet and end the loop
+		if checkValid(remainderString) {
+			allTweets = append(allTweets, remainderString)
+			log.WithField("tweet", remainderString).Info("generated final tweet")
+			break
+		}
+
+		// make an assertion that the first word (with a trailing ellipsis, and a leading one if necessary) alone can fit in a tweet,
+		// otherwise allWords can never decrease in size and an infinite loop will arise
+		validTweet := leadingEllipsis + tweetFromSlice(allWords[:1]) + ellipsis
+		if !checkValid(validTweet) {
+			log.WithFields(log.Fields{"longWord": tweetFromSlice(allWords[:1]), "resultingTweet": validTweet}).Panic("word cannot fit into a tweet by itself")
+		}
+
+		var currentWords []string
+		for {
+			// if there are no more words left to add, then break
+			if len(allWords) == 0 {
+				break
+			}
+
+			// if this is the last word left of allWords, then we do not need a trailing ellipsis
+			trailingEllipsis := ellipsis
+			if len(allWords) == 1 {
+				trailingEllipsis = ""
+			}
+
+			newWord := allWords[0]
+			testTweet := leadingEllipsis + tweetFromSlice(append(currentWords, newWord)) + trailingEllipsis
+			if checkValid(testTweet) {
+				// if this is a valid tweet,
+				// we can safely add newWord to the current tweet being constructed,
+				// and remove the word we just added from allWords
+				currentWords = append(currentWords, newWord)
+				allWords = allWords[1:]
+				// this test tweet was a valid one
+				validTweet = testTweet
+			} else {
+				// otherwise, the addition of the new word would make the tweet invalid, so do not add it
+				break
+			}
+		}
+
+		allTweets = append(allTweets, validTweet)
+
+		log.WithField("validTweet", validTweet).Info("generated one more valid tweet")
+
+		// a leading ellipsis will now be necessary for all subsequent tweets (all but the first one)
+		leadingEllipsis = ellipsis
+
+		// if the length of allWords does not decrease with each iteration of the loop, something has gone wrong
+		if len(allWords) >= previousAllWordsCount {
+			log.WithFields(log.Fields{"allWords": allWords, "previousAllWordsCount": previousAllWordsCount, "allTweets": allTweets, "validTweet": validTweet}).Panic("something has gone wrong and the length of allWords has not decreased during this iteration")
+		}
+	}
+
+	log.WithField("allTweets", allTweets).Info("finished generating tweets")
+
+	return allTweets
+}
+
+func postTweetWithImage(httpClient *http.Client, tweetBody string, mediaId string) string {
 	// create an object to be used in the http POST request to twitter
-	req := TweetRequest{
+	req := TweetRequestWithMedia{
 		Text: tweetBody,
 		Media: map[string][]string{
 			"media_ids": {mediaId},
@@ -261,14 +321,14 @@ func postTweetWithImage(httpClient *http.Client, tweetBody string, mediaId strin
 
 	postBody, err := json.Marshal(req)
 	if err != nil {
-		log.WithError(err).WithFields(log.Fields{"text": tweetBody, "mediaId": mediaId}).Panic("could not marshal TweetRequest object to JSON")
+		log.WithError(err).WithFields(log.Fields{"text": tweetBody, "mediaId": mediaId}).Panic("could not marshal TweetRequestWithMedia object to JSON")
 	}
 
 	log.WithField("requestBody", string(postBody)).Info("post body generated")
 
 	resp, err := httpClient.Post("https://api.twitter.com/2/tweets", "application/json", bytes.NewBuffer(postBody))
 
-	//Handle Error
+	// handle error
 	if err != nil {
 		log.WithError(err).Panic("could not submit tweet")
 	}
@@ -284,6 +344,58 @@ func postTweetWithImage(httpClient *http.Client, tweetBody string, mediaId strin
 	} else {
 		log.Info("received http OK on submitting tweet")
 	}
+
+	// read media id from Twitter API response
+	t := &TweetPost{}
+	err = json.NewDecoder(resp.Body).Decode(t)
+	if err != nil {
+		log.WithError(err).Panic("could not decode Twitter API response and find id of posted tweet")
+	}
+	return t.Data.Id
+}
+
+func postTweetInReply(httpClient *http.Client, tweetBody string, replyId string) string {
+	// create an object to be used in the http POST request to twitter
+	req := TweetRequestInReply{
+		Text: tweetBody,
+		Reply: map[string]string{
+			"in_reply_to_tweet_id": replyId,
+		},
+	}
+
+	postBody, err := json.Marshal(req)
+	if err != nil {
+		log.WithError(err).WithFields(log.Fields{"text": tweetBody, "replyId": replyId}).Panic("could not marshal TweetRequestInReply object to JSON")
+	}
+
+	log.WithField("requestBody", string(postBody)).Info("post body generated for tweet")
+
+	resp, err := httpClient.Post("https://api.twitter.com/2/tweets", "application/json", bytes.NewBuffer(postBody))
+
+	// handle error
+	if err != nil {
+		log.WithError(err).Panic("could not submit tweet")
+	}
+	defer resp.Body.Close()
+
+	// check http response
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.WithError(err).WithField("statusCode", resp.StatusCode).Panic("could not read http response body after attempt to submit tweet resulted in a bad http status")
+		}
+		log.WithFields(log.Fields{"statusCode": resp.StatusCode, "body": string(body)}).Panic("bad http status while submitting tweet")
+	} else {
+		log.Info("received http OK on submitting tweet")
+	}
+
+	// read media id from Twitter API response
+	t := &TweetPost{}
+	err = json.NewDecoder(resp.Body).Decode(t)
+	if err != nil {
+		log.WithError(err).Panic("could not decode Twitter API response and find id of posted tweet")
+	}
+	return t.Data.Id
 }
 
 func main() {
@@ -328,6 +440,23 @@ func main() {
 	mediaId := uploadImage(httpClient, compressedFile)
 	log.Info("potd image uploaded")
 
-	postTweetWithImage(httpClient, TruncateTweetBody(potd.Description), mediaId)
-	log.Info("tweet posted")
+	// generate batch of tweets to send out
+	tweetsBatch := TruncateTweetBody(potd.Description)
+
+	if len(tweetsBatch) >= 100 {
+		log.WithFields(log.Fields{"description": potd.Description, "tweetCount": len(tweetsBatch), "tweets": tweetsBatch}).Panic("too many tweets generated from description")
+	}
+
+	// post initial tweet with image
+	id := postTweetWithImage(httpClient, tweetsBatch[0], mediaId)
+	log.WithField("id", id).Info("tweet posted with media")
+	tweetsBatch = tweetsBatch[1:]
+
+	// post each of the remaining tweets
+	for _, tweetText := range tweetsBatch {
+		id = postTweetInReply(httpClient, tweetText, id)
+		log.WithField("id", id).Info("tweet posted in reply to previous tweet")
+	}
+
+	log.Info("done posting tweets")
 }
