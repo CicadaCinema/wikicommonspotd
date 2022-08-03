@@ -13,6 +13,7 @@ import (
 	"google.golang.org/api/sheets/v4"
 	"io"
 	"io/ioutil"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -124,7 +125,11 @@ func compressFile(path string, quality int, fileSizeLimit int) string {
 		log.WithError(err).Panic("could not get image dimensions")
 	}
 
-	maxWidth := dimensions.Width
+	// uploaded images must be at most 4096x4096 in size
+	maxWidth := 4096
+	if dimensions.Height > dimensions.Width {
+		math.Floor((float64(4096) / float64(dimensions.Height)) * float64(dimensions.Width))
+	}
 	minWidth := 1
 	var body []byte
 
@@ -145,7 +150,12 @@ func compressFile(path string, quality int, fileSizeLimit int) string {
 		}
 	}
 
-	log.WithFields(log.Fields{"size": size, "width": minWidth}).Info("an acceptable result was obtained")
+	finalDimensions, err := bimg.NewImage(body).Size()
+	if err != nil {
+		log.WithError(err).Panic("could not get final image dimensions")
+	}
+
+	log.WithFields(log.Fields{"size": size, "width": finalDimensions.Width, "height": finalDimensions.Height}).Info("an acceptable result was obtained")
 
 	err = bimg.Write("new.jpeg", body)
 	if err != nil {
