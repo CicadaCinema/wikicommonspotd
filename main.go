@@ -71,8 +71,10 @@ func getPotdInfo(spreadsheetId string, sheetRange string) PotdEntry {
 	row := resp.Values[0]
 
 	// isolate description text
-	descriptionCut := strings.Split(fmt.Sprintf("%s", row[0]), "] \n\n")[1]
+	descriptionCut := strings.Split(fmt.Sprintf("%s", row[0]), " \nPicture of the day \n\n")[1]
 	descriptionCleaned := strings.Replace(descriptionCut, "\n", "", -1)
+
+	log.WithFields(log.Fields{"descriptionCell": row[0], "descriptionCleaned": descriptionCleaned, "downloadUrlCell": row[1]}).Info("fetched data from sheets")
 
 	// return two formatted strings representing the potd entry for today
 	return PotdEntry{
