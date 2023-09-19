@@ -175,8 +175,11 @@ func compressFile(path string, quality int, fileSizeLimit int) string {
 func getAuthorisedClient() *http.Client {
 	// authorize the developer account @WikiCommonsPOTD
 	// TODO: store this in an environment variable
-	config := oauth1.NewConfig("dVeflYuXw41yARdDiyx3h4hWU", "mGKCM7JEWdGNJ1CO5BcnjLmkqxTc9cPBJEehxvKXx6tI2XCvTC")
-	token := oauth1.NewToken("1545826323569967107-iu5Pl20y1h7Ei3HJPzoWKBqA2uUh27", "XaDRGgDo6NQTWwvqOuZSsDgDtnR0jiGC5rIwvvaXLU0YI")
+
+	// API Key and API Key Secret
+	config := oauth1.NewConfig("ukX7dCIduLZCEJdIogEu16H31", "luX9zurb9dbC7Dz8J7wNL5XimSfWT0yVdNTgc1GWel6Uc5kCET")
+	// Access Token and Access Token Secret
+	token := oauth1.NewToken("1545826323569967107-yEMbLgpx3uPQkrIchRyFhRKp5vx2Ch", "76858oMblLW2OJfXQPGdzr3wjIJZSAB3Xdm8yTePvQNKw")
 
 	return config.Client(oauth1.NoContext, token)
 }
