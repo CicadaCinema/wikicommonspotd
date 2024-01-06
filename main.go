@@ -4,13 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
-	"github.com/dghubble/oauth1"
-	"github.com/h2non/bimg"
-	twtextparse "github.com/myl7/twitter-text-parse-go/pkg/gnu"
-	log "github.com/sirupsen/logrus"
-	"google.golang.org/api/option"
-	"google.golang.org/api/sheets/v4"
 	"io"
 	"io/ioutil"
 	"math"
@@ -20,6 +15,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/dghubble/oauth1"
+	"github.com/h2non/bimg"
+	twtextparse "github.com/myl7/twitter-text-parse-go/pkg/gnu"
+	log "github.com/sirupsen/logrus"
+	"google.golang.org/api/option"
+	"google.golang.org/api/sheets/v4"
 )
 
 type PotdEntry struct {
