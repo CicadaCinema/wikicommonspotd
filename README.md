@@ -1,3 +1,4 @@
+- Populate `conf.json` using Twitter API credentials.
 - Create directory `logs`.
 - Build by using `go build main.go`.
 - Add script in crontab using `crontab -e` by adding the line `0 15 * * * cd /home/tarsier/_Active_Projects/wikicommonspotd && ./main > "./logs/$(date -I).json" 2>&1`.
