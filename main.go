@@ -2,10 +2,8 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"encoding/xml"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"math"
@@ -13,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -20,13 +19,12 @@ import (
 	"github.com/h2non/bimg"
 	twtextparse "github.com/myl7/twitter-text-parse-go/pkg/gnu"
 	log "github.com/sirupsen/logrus"
-	"google.golang.org/api/option"
-	"google.golang.org/api/sheets/v4"
+	"golang.org/x/net/html"
 )
 
 type PotdEntry struct {
-	Description string `json:"description"`
-	DownloadUrl string `json:"downloadUrl"`
+	Description string
+	DownloadUrl string
 }
 
 type MediaUpload struct {
@@ -51,38 +49,152 @@ type TweetRequestInReply struct {
 	Reply map[string]string `json:"reply"`
 }
 
-func getPotdInfo(spreadsheetId string, sheetRange string) PotdEntry {
-	ctx := context.Background()
+func assert(condition bool, message string) {
+	if !condition {
+		log.Panic(message)
+	}
+}
 
-	// create sheets service to access the API
-	// TODO: store this in an environment variable
-	srv, err := sheets.NewService(ctx, option.WithAPIKey("AIzaSyCbiT9ks0PJZCgy1Fi56sL6-5fFlVaqV68"))
+func depthFirstTraverse(node *html.Node, visit func(*html.Node)) {
+	// boilerplate copied from https://pkg.go.dev/golang.org/x/net/html
+	var f func(*html.Node)
+	f = func(n *html.Node) {
+		visit(n)
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			f(c)
+		}
+	}
+	f(node)
+}
+
+func textDescription(node *html.Node) string {
+	result := ""
+	depthFirstTraverse(node, func(n *html.Node) {
+		if n.Type == html.TextNode {
+			result += n.Data
+		}
+	})
+	return result
+}
+
+func getPotdFromXML(htmlTable string) PotdEntry {
+	doc, err := html.Parse(strings.NewReader(htmlTable))
 	if err != nil {
-		log.WithError(err).Panic("unable to retrieve sheets service")
+		log.WithError(err).Panic("unable to parse html table")
 	}
 
-	// fetch data from the given range of the given sheet
-	resp, err := srv.Spreadsheets.Values.Get(spreadsheetId, sheetRange).Do()
+	// attempt to find the descriptions node and url
+	descriptions := []string{}
+	var fileName, thumbnailUrl string
+	var foundFileName, foundThumbnailUrl bool
+	depthFirstTraverse(doc, func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "div" {
+			for _, attr := range n.Attr {
+				if attr.Key == "class" && slices.Contains(strings.Split(attr.Val, " "), "description") {
+					// found a description node
+					descriptions = append(descriptions, textDescription(n))
+					break
+				}
+			}
+		}
+		if n.Type == html.ElementNode && n.Data == "a" {
+		outer1:
+			for _, attr1 := range n.Attr {
+				if attr1.Key == "class" && slices.Contains(strings.Split(attr1.Val, " "), "mw-file-description") {
+					for _, attr2 := range n.Attr {
+						if attr2.Key == "href" {
+							// found a node with the filename
+							if foundFileName {
+								log.Warn("expected one filename, found multiple")
+							} else {
+								fileName = attr2.Val[12:]
+								foundFileName = true
+							}
+							break outer1
+						}
+
+					}
+				}
+
+			}
+		}
+		if n.Type == html.ElementNode && n.Data == "img" {
+		outer2:
+			for _, attr1 := range n.Attr {
+				if attr1.Key == "class" && slices.Contains(strings.Split(attr1.Val, " "), "mw-file-element") {
+					for _, attr2 := range n.Attr {
+						if attr2.Key == "src" {
+							// found a node with the thumbnail url
+							if foundThumbnailUrl {
+								log.Warn("expected one thumbnail url, found multiple")
+							} else {
+								thumbnailUrl = attr2.Val
+								foundThumbnailUrl = true
+							}
+							break outer2
+						}
+
+					}
+				}
+
+			}
+		}
+
+	})
+
+	// we only expect one description, but this is non-critical because it does not effect the tweet being posted
+	if len(descriptions) > 1 {
+		log.WithField("descriptions", descriptions).Warn("expected one description, parsed html to find multiple")
+	} else if len(descriptions) == 0 {
+		log.WithField("descriptions", descriptions).Warn("expected one description, parsed html to find zero")
+
+		// insert zero value
+		descriptions = append(descriptions, "")
+	}
+
+	// expect to find both the filename and the thumbnail url
+	if !foundFileName {
+		log.Warn("expected to find filename")
+	}
+	if !foundThumbnailUrl {
+		log.Warn("expected to find thumbnail url")
+	}
+
+	// only attempt to construct download url if we have found both of the above
+	downloadUrl := ""
+	if foundFileName && foundThumbnailUrl {
+		thumbnailParts := strings.Split(thumbnailUrl, fileName)
+		downloadUrl = strings.Replace(thumbnailParts[0], "/thumb", "", 1) + fileName
+	}
+
+	return PotdEntry{Description: descriptions[0], DownloadUrl: downloadUrl}
+}
+
+func getHtmlFromFeed() string {
+	// request feed via http
+	resp, err := http.Get("https://commons.wikimedia.org/w/api.php?action=featuredfeed&feed=potd&language=en")
 	if err != nil {
-		log.WithError(err).Panic("unable to retrieve data from sheet")
+		log.WithError(err).Panic("unable to retrieve RSS feed via http")
+	}
+	defer resp.Body.Close()
+
+	// retrieve serialised xml from body
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.WithError(err).WithField("statusCode", resp.StatusCode).Panic("unable to read http response body after retrieving RSS feed")
 	}
 
-	if len(resp.Values) == 0 {
-		log.WithError(err).Panic("no data found in sheet")
+	// unmarshal the only field we need
+	type FeedXML struct {
+		HtmlTable string `xml:"channel>item>description"`
 	}
-	row := resp.Values[0]
-
-	// isolate description text
-	descriptionCut := strings.Split(fmt.Sprintf("%s", row[0]), " \nPicture of the day \n\n")[1]
-	descriptionCleaned := strings.Replace(descriptionCut, "\n", "", -1)
-
-	log.WithFields(log.Fields{"descriptionCell": row[0], "descriptionCleaned": descriptionCleaned, "downloadUrlCell": row[1]}).Info("fetched data from sheets")
-
-	// return two formatted strings representing the potd entry for today
-	return PotdEntry{
-		Description: descriptionCleaned,
-		DownloadUrl: fmt.Sprintf("%s", row[1]),
+	var feedXml FeedXML
+	err = xml.Unmarshal(body, &feedXml)
+	if err != nil {
+		log.WithError(err).Panic("unable to unmarshal RSS XML feed")
 	}
+
+	return feedXml.HtmlTable
 }
 
 func downloadFile(file *os.File, url string) {
@@ -421,8 +533,8 @@ func main() {
 	log.SetFormatter(&log.JSONFormatter{})
 	log.Info("logger started")
 
-	// fetch today's potd data from Google Sheets
-	potd := getPotdInfo("1Dt5PGEW5p5biif8QGuOfYTHjH8NeRfkf2vaHxuqoYGc", "Sheet1!Y1:Z1")
+	// fetch today's potd data from RSS Feed
+	potd := getPotdFromXML(getHtmlFromFeed())
 	log.WithField("PotdEntry", potd).Info("fetched today's potd")
 
 	// create unique temporary file which will be overwritten by the potd image
