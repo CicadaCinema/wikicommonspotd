@@ -9,6 +9,7 @@ import (
 	"math"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -163,6 +164,20 @@ func getPotdFromXML(htmlTable string) PotdEntry {
 	// only attempt to construct download url if we have found both of the above
 	downloadUrl := ""
 	if foundFileName && foundThumbnailUrl {
+		// bring both strings to a consistent form
+		thumbnailUrlUnescaped, err := url.QueryUnescape(thumbnailUrl)
+		if err != nil {
+			log.WithFields(log.Fields{"thumbnailUrl": thumbnailUrl, "thumbnailUrlUnescaped": thumbnailUrlUnescaped}).Warn("failed to URL unescape thumbnail URL")
+		} else {
+			thumbnailUrl = thumbnailUrlUnescaped
+		}
+		fileNameUnescaped, err := url.QueryUnescape(fileName)
+		if err != nil {
+			log.WithFields(log.Fields{"fileName": fileName, "fileNameUnescaped": fileNameUnescaped}).Warn("failed to URL unescape filename")
+		} else {
+			fileName = fileNameUnescaped
+		}
+
 		thumbnailParts := strings.Split(thumbnailUrl, fileName)
 		downloadUrl = strings.Replace(thumbnailParts[0], "/thumb", "", 1) + fileName
 	}
