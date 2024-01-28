@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"io"
-	"io/ioutil"
 	"math"
 	"mime/multipart"
 	"net/http"
@@ -194,7 +193,7 @@ func getHtmlFromFeed() string {
 	defer resp.Body.Close()
 
 	// retrieve serialised xml from body
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.WithError(err).WithField("statusCode", resp.StatusCode).Panic("unable to read http response body after retrieving RSS feed")
 	}
@@ -366,7 +365,7 @@ func uploadImage(httpClient *http.Client, imagePath string) string {
 
 	// check http response
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			log.WithError(err).WithField("statusCode", resp.StatusCode).Panic("could not read http response body after attempt to upload media to Twitter resulted in a bad http status")
 		}
@@ -496,7 +495,7 @@ func postTweetWithImage(httpClient *http.Client, tweetBody string, mediaId strin
 
 	// check http response
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			log.WithError(err).WithField("statusCode", resp.StatusCode).Panic("could not read http response body after attempt to submit tweet resulted in a bad http status")
 		}
@@ -540,7 +539,7 @@ func postTweetInReply(httpClient *http.Client, tweetBody string, replyId string)
 
 	// check http response
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			log.WithError(err).WithField("statusCode", resp.StatusCode).Panic("could not read http response body after attempt to submit tweet resulted in a bad http status")
 		}
