@@ -24,8 +24,8 @@ import (
 )
 
 type PotdEntry struct {
-	description string
-	downloadUrl string
+	Description string
+	DownloadUrl string
 }
 
 type MediaUpload struct {
@@ -182,7 +182,7 @@ func getPotdFromXML(htmlTable string) PotdEntry {
 		downloadUrl = strings.Replace(thumbnailParts[0], "/thumb", "", 1) + fileName
 	}
 
-	return PotdEntry{description: descriptions[0], downloadUrl: downloadUrl}
+	return PotdEntry{Description: descriptions[0], DownloadUrl: downloadUrl}
 }
 
 func getHtmlFromFeed() string {
@@ -566,7 +566,7 @@ func main() {
 
 	// fetch today's potd data from RSS Feed
 	potd := getPotdFromXML(getHtmlFromFeed())
-	log.WithField("PotdEntry", potd).Info("fetched today's potd")
+	log.WithField("potdEntry", potd).Info("fetched today's potd")
 
 	// create unique temporary file which will be overwritten by the potd image
 	tempFile, err := os.CreateTemp("", "potdFile")
@@ -577,9 +577,9 @@ func main() {
 	log.WithField("path", tempFile.Name()).Info("created temporary file")
 
 	// download the potd image, saving it to the path of the temporary file
-	downloadFile(tempFile, potd.downloadUrl)
+	downloadFile(tempFile, potd.DownloadUrl)
 	log.WithFields(log.Fields{
-		"url":         potd.downloadUrl,
+		"url":         potd.DownloadUrl,
 		"destination": tempFile.Name(),
 	}).Info("downloaded potd image")
 
@@ -601,10 +601,10 @@ func main() {
 	log.Info("potd image uploaded")
 
 	// generate batch of tweets to send out
-	tweetsBatch := TruncateTweetBody(potd.description)
+	tweetsBatch := TruncateTweetBody(potd.Description)
 
 	if len(tweetsBatch) >= 100 {
-		log.WithFields(log.Fields{"description": potd.description, "tweetCount": len(tweetsBatch), "tweets": tweetsBatch}).Panic("too many tweets generated from description")
+		log.WithFields(log.Fields{"description": potd.Description, "tweetCount": len(tweetsBatch), "tweets": tweetsBatch}).Panic("too many tweets generated from description")
 	}
 
 	// post initial tweet with image
