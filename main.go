@@ -107,7 +107,7 @@ func getPotdFromXML(htmlTable string) PotdEntry {
 							if foundFileName {
 								log.Warn("expected one filename, found multiple")
 							} else {
-								fileName = attr2.Val[12:]
+								fileName = attr2.Val[11:]
 								foundFileName = true
 							}
 							break outer1
