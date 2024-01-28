@@ -177,6 +177,8 @@ func getPotdFromXML(htmlTable string) PotdEntry {
 			fileName = fileNameUnescaped
 		}
 
+		log.WithFields(log.Fields{"fileName": fileName, "thumbnailUrl": thumbnailUrl}).Info("found filename and thumbnail URL")
+
 		thumbnailParts := strings.Split(thumbnailUrl, fileName)
 		downloadUrl = strings.Replace(thumbnailParts[0], "/thumb", "", 1) + fileName
 	}
